@@ -55,6 +55,7 @@ def Plot_by_cohort(Cohorts):
     for cohort in Cohorts:
         sns.lineplot(data = df[df["Cohort"] == cohort], x = "ARDY", y = "ASFR", label = str(cohort))
 
+    return 0
 #Plot_by_cohort([1950, 1960, 1970, 1980, 1990, 2000])
 #plt.show()
 
@@ -66,15 +67,14 @@ def Fit_Gaussian(cohort, cutoff_ages): # Fit a Gaussian function to ASFRs - this
     
     x_train = df_train["ARDY"]
     y_train = df_train["ASFR"]
-
+ 
     x_all = np.linspace(12, 55, 44);
 
 
     fitter = modeling.fitting.LevMarLSQFitter()
-    model = modeling.models.Gaussian1D(amplitude = 0.1, mean = 25, stddev = 5)   # Initial values for the fitting algorithm to be revised
+    model = modeling.models.Gaussian1D(amplitude = 0.2, mean = 25, stddev = 5)   # Initial values for the fitting algorithm to be revised
     fitted_model = fitter(model, x_train, y_train)
 
-    
     #sns.lineplot(data = df_cohort, x = "ARDY", y = "ASFR")
     #sns.lineplot(x = x_all, y = fitted_model(x_all))
     #plt.show()
@@ -105,8 +105,8 @@ def Extrapolate_ASFR(cohort, obs_year, asfr, ccf_only = 0, plot_flag = 0):
     x_extrapolated = np.linspace(min(obs_year-cohort+1, 55), 55, max(0, 55 - (obs_year-cohort))); # Extrapolation starts 1 year after the cutoff
     y_extrapolated = fitted_model(x_extrapolated);
     
-    asfr_cohort_observed = asfr[(asfr["ARDY"] <= obs_year - cohort) & (asfr["Cohort"] == cohort)]; # Filter for ages, and filter for the analysed cohort
-    #print(asfr_cohort_observed)
+    # From the particular cohort, only include ages observed up to the present day
+    asfr_cohort_observed = asfr[(asfr["ARDY"] <= obs_year - cohort) & (asfr["Cohort"] == cohort)]; 
     if len(y_extrapolated) == 0:
         extrapolated_flag = 0
     else:
@@ -127,16 +127,27 @@ def Extrapolate_ASFR(cohort, obs_year, asfr, ccf_only = 0, plot_flag = 0):
         asfr_extrapolated = pd.DataFrame([ [i, j, 1] for i, j in zip(x_extrapolated, y_extrapolated)], columns = ["ARDY", "ASFR", "Extrapolated?"])
 
         asfr_extrapolated['Year'] = cohort + asfr_extrapolated['ARDY']
-        asfr_extrapolated['Cohort'] = cohort
+        asfr_extrapolated['Cohort'] = float(cohort)
 
-        print(asfr_extrapolated)
+        #print(asfr_extrapolated)
         
         return asfr_extrapolated
 
 
     return 0
     
+def Extrapolate_births(start, end = 2021, fem, asfr_observed):
 
+    asfr_extrapolated = pd.DataFrame()
+                    
+    for i in range(0, 8): # Modify the range
+        a = Extrapolate_ASFR(1975+i, start, asfr_observed)
+        asfr_extrapolated = pd.concat([asfr, a]) # So far, this dataframe contains ASFRs for ages >~ 32
+
+
+    
+
+    return [Compute_births(y, fem, asfr_extrapolated) for y in range(start, end)]
 ##def Extrapolate_CCF(cohort, obs_year, asfr, plot_flag = 0):
 ##
 ##    fitted_model = Fit_Gaussian(cohort, [28, obs_year-cohort]) # Fit a Gaussian to observed ASFRs, based on ASFRs observed in ages between [X, Y]
@@ -305,7 +316,8 @@ def Backtesting(test, asfr, start = 1955, late_cutoff_age = 32, obs_years = []):
     # Late_cutoff_age corresponds to the cutoff age in the ASFR/CCF extrapolations, for whatever fitting function we use
     # obs_years are the years at which we make the extrapolation. We then test the accuracy of extrapolation by using the full available data.
 
-
+    abs_error = []
+    mean_error = []
     
     if test == 'CCF':
         rows = []
@@ -319,8 +331,62 @@ def Backtesting(test, asfr, start = 1955, late_cutoff_age = 32, obs_years = []):
 
 
         extrapolated_data = pd.DataFrame(rows, columns = ["Observation year", "Cohort", "CCF", "Extrapolated?"])
-        print(extrapolated_data)
-        #observations = [0]
+        #print(extrapolated_data)
+        #print(asfr)
+        ccf_observed = asfr[(asfr['Cohort'] <= asfr['Year'].max() - 55) & (asfr['Cohort'] > asfr['Year'].min() - 15)].groupby('Cohort')['ASFR'].sum()
+        ccf_observed = ccf_observed.to_frame(name = 'CCF')
+        ccf_observed.reset_index(inplace = True)
+        #print(ccf_observed)
+        
+        plt.figure(num = 27)
+        sns.lineplot(data = ccf_observed, x = 'Cohort', y = 'CCF', label = 'Observed CCF')
+        for obs_year in obs_years:
+            sns.lineplot(data = extrapolated_data[extrapolated_data["Observation year"] == obs_year], x = 'Cohort', y = 'CCF', label = 'Extrapolated CCF in year ' + str(obs_year))
+
+        #plt.show()
+        
+            merged_data = pd.merge(left = extrapolated_data[extrapolated_data["Observation year"] == obs_year], right = ccf_observed, how = 'inner', on = ['Cohort'], suffixes = ['_extrapolated', '_observed'])
+
+            print(merged_data)
+            diff = merged_data['CCF_extrapolated'] - merged_data['CCF_observed']
+            #print(diff)
+            abs_error.append(sum(abs(diff))/len(diff))
+            mean_error.append(sum(diff)/len(diff))
+            
+        
+        return [[a, b] for a, b in zip(abs_error, mean_error)]
+
+    elif test == 'ASFR':
+        extrapolated_data = pd.DataFrame()
+
+        for obs_year in obs_years:
+            end = obs_year - late_cutoff_age; # We will forget all data past the late cutoff age
+            x = np.linspace(start, end, end - start + 1)
+            for i in x:
+                ex_asfr = Extrapolate_ASFR(int(i), obs_year, asfr, 0)
+
+                extrapolated_data = pd.concat([extrapolated_data, ex_asfr])
+
+##            with pd.option_context('display.max_rows', None,
+##                       'display.max_columns', None,
+##                       'display.precision', 3,
+##                       ):
+##                print(extrapolated_data)
+
+            #print(asfr[asfr['Year'] >= obs_year])
+
+            merged_data = pd.merge(left = extrapolated_data, right = asfr[asfr['Year'] >= obs_year], how = 'inner', on = ['Cohort', 'Year', 'ARDY'], suffixes = ['_extrapolated', '_observed'])
+
+            print(merged_data)
+            diff = merged_data['ASFR_extrapolated'] - merged_data['ASFR_observed']
+            #print(diff)
+            abs_error.append(sum(abs(diff))/len(diff))
+            mean_error.append(sum(diff)/len(diff))
+
+            
+            
+        return merged_data
+        #return [[a, b] for a, b in zip(abs_error, mean_error)]
     
     
     return 0
@@ -341,13 +407,13 @@ fem = Reconstruct_under12_population(births_total, fem, deaths)
 
 #Test_birth_counts(list(range(1975, 2010)), df, fem, births_total)
 
-plt.figure()
+#plt.figure()
 colors = ('k', 'r', 'b', 'g', 'm')
 c_it = iter(colors)
-Plot_CCF(1955, 1970, 2002, df)
-Plot_CCF(1955, 1980, 2012, df)
-Plot_CCF(1955, 1990, 2022, df)
-plt.show()
+##Plot_CCF(1955, 1970, 2002, df)
+##Plot_CCF(1955, 1980, 2012, df)
+##Plot_CCF(1955, 1990, 2022, df)
+##plt.show()
 #Fit_Gaussian(1975, [28, 36])
 
 
