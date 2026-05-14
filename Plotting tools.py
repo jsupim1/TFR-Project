@@ -18,16 +18,17 @@ df["Cohort"] = df["Cohort"].astype(float)
 
 for obs_year in [2002, 2006, 2010, 2014]:
 
-    merged_data = TFR.Backtesting('ASFR', df, obs_years = [obs_year])
+    merged_data = TFR.Backtesting('ASFR', df, obs_years = [obs_year], return_mode = 'data')
 
-    md = lambda y: merged_data[merged_data['Cohort'] == y]
+    md = lambda y: merged_data[merged_data['Cohort'] == y] # Pick the cohort
 
-    plot_asfr_errors = lambda y: plt.plot(md(y)['ARDY'], md(y)['ASFR_extrapolated'] - md(y)['ASFR_observed'])
+    plot_asfr_errors = lambda y: plt.plot(md(y)['ARDY'], md(y)['ASFR_extrapolated'] - md(y)['ASFR_observed'], label = 'Cohort: ' + str(y))
 
 
     plt.figure(obs_year)
-    for cutoff in [34, 36, 38, 40, 42]:
+    for cutoff in [34, 36, 38, 40, 42]: # We extrapolate ASFRs for cohorts that are now: 34yo, 36yo, etc.
         plot_asfr_errors(obs_year - cutoff)
+        plt.legend()
 
 
 plt.show()
